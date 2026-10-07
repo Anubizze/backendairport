@@ -3,7 +3,7 @@ import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
-import { json, urlencoded } from 'express';
+import { json, static as serveStatic, urlencoded } from 'express';
 import { existsSync, mkdirSync } from 'fs';
 import helmet from 'helmet';
 import { join } from 'path';
@@ -21,13 +21,22 @@ async function bootstrap() {
 
   const uploadsServicesDir = join(process.cwd(), 'uploads', 'services');
   const uploadsDocumentsDir = join(process.cwd(), 'uploads', 'documents');
+  const uploadsSchedulesDir = join(process.cwd(), 'uploads', 'schedules');
+  const uploadsAirlinesDir = join(process.cwd(), 'uploads', 'airlines');
   if (!existsSync(uploadsServicesDir)) {
     mkdirSync(uploadsServicesDir, { recursive: true });
   }
   if (!existsSync(uploadsDocumentsDir)) {
     mkdirSync(uploadsDocumentsDir, { recursive: true });
   }
+  if (!existsSync(uploadsSchedulesDir)) {
+    mkdirSync(uploadsSchedulesDir, { recursive: true });
+  }
+  if (!existsSync(uploadsAirlinesDir)) {
+    mkdirSync(uploadsAirlinesDir, { recursive: true });
+  }
   app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads' });
+  app.use('/api/uploads', serveStatic(join(process.cwd(), 'uploads')));
 
   app.setGlobalPrefix('api');
 

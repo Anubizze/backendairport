@@ -205,14 +205,8 @@ export class FlightsService {
           scheduledTime,
           estimatedTime,
           status: dto.status ?? 'scheduled',
+          scheduleLocked: true,
         })
-        .returning();
-
-      // Admin-created flights are protected from automatic sync overwrites.
-      [created] = await this.drizzle.db
-        .update(flights)
-        .set({ updatedAt: new Date(Date.now() + 60_000) })
-        .where(eq(flights.id, created.id))
         .returning();
     } catch (error) {
       this.throwDbError(error, 'create');
@@ -259,6 +253,7 @@ export class FlightsService {
         scheduledTime,
         estimatedTime,
         status: dto.status ?? current.status,
+        scheduleLocked: true,
         updatedAt: new Date(),
       })
       .where(eq(flights.id, id))

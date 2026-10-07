@@ -1,9 +1,15 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { and, desc, eq, lt } from 'drizzle-orm';
+import { and, desc, eq, lt, sql } from 'drizzle-orm';
 
 import { DrizzleService } from '../db/drizzle.service';
-import { flights } from '../db/schema';
+import { flightScheduleEntries, flights, scheduleBoard } from '../db/schema';
 import { FlightsEventsService } from '../flights/flights.events';
 
 class AviationStackRateLimitError extends Error {
@@ -35,112 +41,124 @@ type ProviderFlight = {
     | 'arrived';
 };
 
+type PlannedSlot = {
+  flightNumber: string;
+  city: string;
+  time: string;
+  validFrom?: string;
+  validTo?: string;
+};
+
 const DEFAULT_ALLOWED_ROUTES: Array<{
   flightNumber: string;
   direction: 'arrival' | 'departure';
   city: string;
 }> = [
-  { flightNumber: 'KC7352', direction: 'departure', city: 'astana' },
-  { flightNumber: 'KC7152', direction: 'departure', city: 'almaty' },
-  { flightNumber: 'KC7154', direction: 'departure', city: 'almaty' },
+  { flightNumber: 'IQ374', direction: 'departure', city: 'astana' },
+  { flightNumber: 'FS7152', direction: 'departure', city: 'almaty' },
+  { flightNumber: 'FS7352', direction: 'departure', city: 'astana' },
   { flightNumber: 'IH3107', direction: 'departure', city: 'urzhar' },
-  { flightNumber: 'DV754', direction: 'departure', city: 'karagandy' },
-  { flightNumber: 'KC7351', direction: 'arrival', city: 'astana' },
-  { flightNumber: 'KC7151', direction: 'arrival', city: 'almaty' },
-  { flightNumber: 'KC7153', direction: 'arrival', city: 'almaty' },
+  { flightNumber: 'KC7154', direction: 'departure', city: 'almaty' },
+  { flightNumber: 'FS7154', direction: 'departure', city: 'almaty' },
+  { flightNumber: 'IQ373', direction: 'arrival', city: 'astana' },
+  { flightNumber: 'FS7151', direction: 'arrival', city: 'almaty' },
+  { flightNumber: 'FS7351', direction: 'arrival', city: 'astana' },
   { flightNumber: 'IH3108', direction: 'arrival', city: 'urzhar' },
-  { flightNumber: 'DV753', direction: 'arrival', city: 'karagandy' },
+  { flightNumber: 'KC7153', direction: 'arrival', city: 'almaty' },
+  { flightNumber: 'FS7153', direction: 'arrival', city: 'almaty' },
 ];
 
 const WEEKLY_PLANNED: Record<
   string,
   {
-    departures: Array<{ flightNumber: string; city: string; time: string }>;
-    arrivals: Array<{ flightNumber: string; city: string; time: string }>;
+    departures: PlannedSlot[];
+    arrivals: PlannedSlot[];
   }
 > = {
   mon: {
     departures: [
-      { flightNumber: 'KC7352', city: 'Astana', time: '07:05' },
-      { flightNumber: 'KC7152', city: 'Almaty', time: '13:25' },
-      { flightNumber: 'KC7154', city: 'Almaty', time: '20:55' },
+      { flightNumber: 'IQ374', city: 'Astana', time: '09:45', validFrom: '2026-08-03', validTo: '2026-10-24' },
+      { flightNumber: 'FS7152', city: 'Almaty', time: '13:35', validFrom: '2026-03-29', validTo: '2026-10-25' },
+      { flightNumber: 'FS7352', city: 'Astana', time: '16:20', validFrom: '2026-06-01', validTo: '2026-10-25' },
     ],
     arrivals: [
-      { flightNumber: 'KC7351', city: 'Astana', time: '06:35' },
-      { flightNumber: 'KC7151', city: 'Almaty', time: '12:55' },
-      { flightNumber: 'KC7153', city: 'Almaty', time: '20:25' },
+      { flightNumber: 'IQ373', city: 'Astana', time: '09:20', validFrom: '2026-08-03', validTo: '2026-10-24' },
+      { flightNumber: 'FS7151', city: 'Almaty', time: '13:05', validFrom: '2026-03-29', validTo: '2026-10-25' },
+      { flightNumber: 'FS7351', city: 'Astana', time: '15:50', validFrom: '2026-06-01', validTo: '2026-10-25' },
     ],
   },
   tue: {
     departures: [
-      { flightNumber: 'KC7352', city: 'Astana', time: '07:05' },
-      { flightNumber: 'IH3107', city: 'Urzhar', time: '11:10' },
-      { flightNumber: 'DV754', city: 'Karagandy', time: '12:00' },
-      { flightNumber: 'KC7152', city: 'Almaty', time: '13:25' },
+      { flightNumber: 'IH3107', city: 'Urzhar', time: '09:10', validFrom: '2026-06-01', validTo: '2026-10-31' },
+      { flightNumber: 'FS7152', city: 'Almaty', time: '13:35', validFrom: '2026-03-29', validTo: '2026-10-25' },
+      { flightNumber: 'FS7352', city: 'Astana', time: '16:20', validFrom: '2026-06-01', validTo: '2026-10-25' },
+      { flightNumber: 'KC7154', city: 'Almaty', time: '17:55', validFrom: '2026-10-06', validTo: '2026-10-20' },
     ],
     arrivals: [
-      { flightNumber: 'KC7351', city: 'Astana', time: '06:35' },
-      { flightNumber: 'IH3108', city: 'Urzhar', time: '14:10' },
-      { flightNumber: 'DV753', city: 'Karagandy', time: '11:00' },
-      { flightNumber: 'KC7151', city: 'Almaty', time: '12:55' },
+      { flightNumber: 'IH3108', city: 'Urzhar', time: '12:20', validFrom: '2026-06-01', validTo: '2026-10-31' },
+      { flightNumber: 'FS7151', city: 'Almaty', time: '13:05', validFrom: '2026-03-29', validTo: '2026-10-25' },
+      { flightNumber: 'FS7351', city: 'Astana', time: '15:50', validFrom: '2026-06-01', validTo: '2026-10-25' },
+      { flightNumber: 'KC7153', city: 'Almaty', time: '17:25', validFrom: '2026-10-06', validTo: '2026-10-20' },
     ],
   },
   wed: {
     departures: [
-      { flightNumber: 'KC7352', city: 'Astana', time: '07:50' },
-      { flightNumber: 'KC7152', city: 'Almaty', time: '13:25' },
+      { flightNumber: 'IQ374', city: 'Astana', time: '09:45', validFrom: '2026-08-03', validTo: '2026-10-24' },
+      { flightNumber: 'FS7152', city: 'Almaty', time: '13:35', validFrom: '2026-03-29', validTo: '2026-10-25' },
+      { flightNumber: 'FS7352', city: 'Astana', time: '16:20', validFrom: '2026-06-01', validTo: '2026-10-25' },
     ],
     arrivals: [
-      { flightNumber: 'KC7351', city: 'Astana', time: '06:35' },
-      { flightNumber: 'KC7151', city: 'Almaty', time: '12:55' },
+      { flightNumber: 'IQ373', city: 'Astana', time: '09:20', validFrom: '2026-08-03', validTo: '2026-10-24' },
+      { flightNumber: 'FS7151', city: 'Almaty', time: '13:05', validFrom: '2026-03-29', validTo: '2026-10-25' },
+      { flightNumber: 'FS7351', city: 'Astana', time: '15:50', validFrom: '2026-06-01', validTo: '2026-10-25' },
     ],
   },
   thu: {
     departures: [
-      { flightNumber: 'KC7352', city: 'Astana', time: '07:05' },
-      { flightNumber: 'IH3107', city: 'Urzhar', time: '11:30' },
-      { flightNumber: 'KC7152', city: 'Almaty', time: '13:25' },
-      { flightNumber: 'KC7154', city: 'Almaty', time: '18:15' },
+      { flightNumber: 'FS7152', city: 'Almaty', time: '13:35', validFrom: '2026-03-29', validTo: '2026-10-25' },
+      { flightNumber: 'FS7352', city: 'Astana', time: '16:20', validFrom: '2026-06-01', validTo: '2026-10-25' },
     ],
     arrivals: [
-      { flightNumber: 'KC7351', city: 'Astana', time: '06:35' },
-      { flightNumber: 'IH3108', city: 'Urzhar', time: '14:40' },
-      { flightNumber: 'KC7151', city: 'Almaty', time: '12:55' },
-      { flightNumber: 'KC7153', city: 'Almaty', time: '17:40' },
+      { flightNumber: 'FS7151', city: 'Almaty', time: '13:05', validFrom: '2026-03-29', validTo: '2026-10-25' },
+      { flightNumber: 'FS7351', city: 'Astana', time: '15:50', validFrom: '2026-06-01', validTo: '2026-10-25' },
     ],
   },
   fri: {
     departures: [
-      { flightNumber: 'KC7352', city: 'Astana', time: '07:50' },
-      { flightNumber: 'DV754', city: 'Karagandy', time: '12:00' },
-      { flightNumber: 'KC7152', city: 'Almaty', time: '13:25' },
-      { flightNumber: 'KC7154', city: 'Almaty', time: '17:50' },
+      { flightNumber: 'IH3107', city: 'Urzhar', time: '09:10', validFrom: '2026-06-12', validTo: '2026-10-31' },
+      { flightNumber: 'IQ374', city: 'Astana', time: '09:45', validFrom: '2026-08-03', validTo: '2026-10-24' },
+      { flightNumber: 'FS7152', city: 'Almaty', time: '13:35', validFrom: '2026-03-29', validTo: '2026-10-25' },
+      { flightNumber: 'FS7352', city: 'Astana', time: '16:20', validFrom: '2026-06-01', validTo: '2026-10-25' },
+      { flightNumber: 'FS7154', city: 'Almaty', time: '17:50', validFrom: '2026-04-03', validTo: '2026-10-23' },
     ],
     arrivals: [
-      { flightNumber: 'KC7351', city: 'Astana', time: '06:35' },
-      { flightNumber: 'DV753', city: 'Karagandy', time: '11:00' },
-      { flightNumber: 'KC7151', city: 'Almaty', time: '12:55' },
-      { flightNumber: 'KC7153', city: 'Almaty', time: '17:20' },
+      { flightNumber: 'IQ373', city: 'Astana', time: '09:20', validFrom: '2026-08-03', validTo: '2026-10-24' },
+      { flightNumber: 'IH3108', city: 'Urzhar', time: '12:20', validFrom: '2026-06-12', validTo: '2026-10-31' },
+      { flightNumber: 'FS7151', city: 'Almaty', time: '13:05', validFrom: '2026-03-29', validTo: '2026-10-25' },
+      { flightNumber: 'FS7351', city: 'Astana', time: '15:50', validFrom: '2026-06-01', validTo: '2026-10-25' },
+      { flightNumber: 'FS7153', city: 'Almaty', time: '17:20', validFrom: '2026-04-03', validTo: '2026-10-23' },
     ],
   },
   sat: {
     departures: [
-      { flightNumber: 'KC7352', city: 'Astana', time: '07:05' },
-      { flightNumber: 'KC7152', city: 'Almaty', time: '13:25' },
+      { flightNumber: 'FS7152', city: 'Almaty', time: '13:35', validFrom: '2026-03-29', validTo: '2026-10-25' },
+      { flightNumber: 'FS7352', city: 'Astana', time: '16:20', validFrom: '2026-06-01', validTo: '2026-10-25' },
     ],
     arrivals: [
-      { flightNumber: 'KC7351', city: 'Astana', time: '06:35' },
-      { flightNumber: 'KC7151', city: 'Almaty', time: '12:55' },
+      { flightNumber: 'FS7151', city: 'Almaty', time: '13:05', validFrom: '2026-03-29', validTo: '2026-10-25' },
+      { flightNumber: 'FS7351', city: 'Astana', time: '15:50', validFrom: '2026-06-01', validTo: '2026-10-25' },
     ],
   },
   sun: {
     departures: [
-      { flightNumber: 'KC7352', city: 'Astana', time: '07:50' },
-      { flightNumber: 'KC7152', city: 'Almaty', time: '13:25' },
+      { flightNumber: 'IQ374', city: 'Astana', time: '09:45', validFrom: '2026-08-03', validTo: '2026-10-24' },
+      { flightNumber: 'FS7152', city: 'Almaty', time: '13:35', validFrom: '2026-03-29', validTo: '2026-10-25' },
+      { flightNumber: 'FS7352', city: 'Astana', time: '16:20', validFrom: '2026-06-01', validTo: '2026-10-25' },
     ],
     arrivals: [
-      { flightNumber: 'KC7351', city: 'Astana', time: '06:35' },
-      { flightNumber: 'KC7151', city: 'Almaty', time: '12:55' },
+      { flightNumber: 'IQ373', city: 'Astana', time: '09:20', validFrom: '2026-08-03', validTo: '2026-10-24' },
+      { flightNumber: 'FS7151', city: 'Almaty', time: '13:05', validFrom: '2026-03-29', validTo: '2026-10-25' },
+      { flightNumber: 'FS7351', city: 'Astana', time: '15:50', validFrom: '2026-06-01', validTo: '2026-10-25' },
     ],
   },
 };
@@ -153,7 +171,9 @@ const CITY_CODE_BY_NAME: Record<string, string> = {
 };
 
 const AIRLINE_NAME_BY_CODE: Record<string, string> = {
+  FS: 'FlyArystan',
   KC: 'FlyArystan',
+  IQ: 'Vietjet Qazaqstan',
   DV: 'SCAT',
   IH: 'Hi Sky',
 };
@@ -205,14 +225,16 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
     private readonly events: FlightsEventsService,
   ) {}
 
-  onModuleInit() {
+  async onModuleInit() {
+    await this.ensureScheduleStorage();
+
     const enabled = this.config.get<string>('FLIGHT_SYNC_ENABLED', 'true') !== 'false';
     if (!enabled) {
       this.logger.log('Flight sync disabled by FLIGHT_SYNC_ENABLED=false');
       return;
     }
 
-    this.configureAllowedRoutes();
+    await this.reloadAllowedRoutes();
 
     const accessKey = this.config.get<string>('AVIATIONSTACK_ACCESS_KEY');
     if (!accessKey) {
@@ -264,11 +286,14 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
           apiSource = fetched.length;
 
           const filtered = fetched.filter(
-            (item) => this.isAllowedRoute(item) && this.isToday(item.scheduledTime),
+            (item) =>
+              this.isToday(item.scheduledTime) &&
+              Boolean(this.findPlannedToday(item.flightNumber, item.direction)),
           );
           apiFiltered = filtered.length;
 
-          for (const item of filtered) {
+          for (const rawItem of filtered) {
+            const item = this.withOfficialPlan(rawItem);
             const existing = await this.findExisting(item);
             if (!existing) {
               const [created] = await this.drizzle.db
@@ -286,6 +311,7 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
                   scheduledTime: item.scheduledTime,
                   estimatedTime: item.estimatedTime,
                   status: item.status,
+                  scheduleLocked: true,
                 })
                 .returning();
               createdCount += 1;
@@ -293,7 +319,29 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
               continue;
             }
 
-            if (this.wasManuallyManaged(existing)) continue;
+            if (existing.scheduleLocked || this.wasManuallyManaged(existing)) {
+              const liveChanged =
+                existing.status !== item.status ||
+                (existing.estimatedTime?.getTime() ?? 0) !== (item.estimatedTime?.getTime() ?? 0) ||
+                (existing.gate ?? '') !== (item.gate ?? '');
+
+              if (!liveChanged) continue;
+
+              const [updated] = await this.drizzle.db
+                .update(flights)
+                .set({
+                  gate: item.gate,
+                  estimatedTime: item.estimatedTime,
+                  status: item.status,
+                  updatedAt: new Date(),
+                })
+                .where(eq(flights.id, existing.id))
+                .returning();
+
+              updatedCount += 1;
+              this.events.publish({ type: 'updated', payload: updated });
+              continue;
+            }
 
             const shouldUpdate =
               existing.status !== item.status ||
@@ -386,7 +434,7 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
         .map((flight) => this.mapAviationStackFlight(flight, 'arrival'))
         .filter((x): x is ProviderFlight => Boolean(x));
 
-      return [...depMapped, ...arrMapped];
+      return this.dedupeProviderFlights([...depMapped, ...arrMapped]);
     }
 
     const fetchDepartures = this.syncCycleIndex % 2 === 0;
@@ -398,9 +446,11 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
 
     this.logger.log(`Flight sync fetch: ${direction} only (saves API quota)`);
 
-    return list
-      .map((flight) => this.mapAviationStackFlight(flight, direction))
-      .filter((x): x is ProviderFlight => Boolean(x));
+    return this.dedupeProviderFlights(
+      list
+        .map((flight) => this.mapAviationStackFlight(flight, direction))
+        .filter((x): x is ProviderFlight => Boolean(x)),
+    );
   }
 
   private getRateLimitBackoffMs(response: Response, errorCode?: string): number {
@@ -477,10 +527,10 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
       direction === 'departure' ? item.departure?.estimated : item.arrival?.estimated;
     if (!scheduledRaw) return null;
 
-    const scheduledTime = new Date(scheduledRaw);
-    if (Number.isNaN(scheduledTime.getTime())) return null;
+    const scheduledTime = this.parseAirportLocalTime(scheduledRaw);
+    if (!scheduledTime) return null;
 
-    const estimatedTime = estimatedRaw ? new Date(estimatedRaw) : null;
+    const estimatedTime = this.parseAirportLocalTime(estimatedRaw);
     const parsedEstimated =
       estimatedTime && !Number.isNaN(estimatedTime.getTime()) ? estimatedTime : null;
 
@@ -617,21 +667,7 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
     let removed = 0;
 
     for (const row of existing) {
-      const keep = this.isAllowedRoute({
-        flightNumber: row.flightNumber,
-        airlineName: row.airlineName,
-        airlineCode: row.airlineCode,
-        direction: row.direction,
-        city: row.city,
-        cityCode: row.cityCode,
-        terminal: row.terminal,
-        gate: row.gate ?? null,
-        scheduledTime: row.scheduledTime,
-        estimatedTime: row.estimatedTime,
-        status: row.status,
-      });
-
-      if (keep) continue;
+      if (row.scheduleLocked || this.findPlannedToday(row.flightNumber, row.direction)) continue;
 
       await this.drizzle.db.delete(flights).where(eq(flights.id, row.id));
       this.events.publish({ type: 'deleted', payload: { id: row.id } });
@@ -658,18 +694,49 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
     return removed;
   }
 
+  private airportNowParts(date = new Date()) {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Almaty',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      weekday: 'short',
+      hourCycle: 'h23',
+    }).formatToParts(date);
+    const get = (type: Intl.DateTimeFormatPartTypes) =>
+      parts.find((part) => part.type === type)?.value ?? '';
+    return {
+      year: get('year'),
+      month: get('month'),
+      day: get('day'),
+      weekday: get('weekday'),
+    };
+  }
+
+  private airportWeekday(date = new Date()): number {
+    const map: Record<string, number> = {
+      Sun: 0,
+      Mon: 1,
+      Tue: 2,
+      Wed: 3,
+      Thu: 4,
+      Fri: 5,
+      Sat: 6,
+    };
+    return map[this.airportNowParts(date).weekday] ?? 0;
+  }
+
   private getStartOfToday(): Date {
-    const date = new Date();
-    date.setHours(0, 0, 0, 0);
-    return date;
+    const { year, month, day } = this.airportNowParts();
+    return new Date(`${year}-${month}-${day}T00:00:00+05:00`);
   }
 
   private isSameCalendarDay(a: Date, b: Date): boolean {
-    return (
-      a.getFullYear() === b.getFullYear() &&
-      a.getMonth() === b.getMonth() &&
-      a.getDate() === b.getDate()
-    );
+    const left = this.airportNowParts(a);
+    const right = this.airportNowParts(b);
+    return left.year === right.year && left.month === right.month && left.day === right.day;
   }
 
   private isToday(date: Date): boolean {
@@ -707,7 +774,7 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
   }
 
   private getDayKey(date: Date): keyof typeof WEEKLY_PLANNED {
-    const idx = date.getDay();
+    const idx = this.airportWeekday(date);
     const map: Record<number, keyof typeof WEEKLY_PLANNED> = {
       0: 'sun',
       1: 'mon',
@@ -720,11 +787,96 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
     return map[idx];
   }
 
+  private airportDateKey(date = new Date()): string {
+    const { year, month, day } = this.airportNowParts(date);
+    return `${year}-${month}-${day}`;
+  }
+
+  private isPlanValidToday(item: { validFrom?: string; validTo?: string }): boolean {
+    const today = this.airportDateKey();
+    if (item.validFrom && today < item.validFrom) return false;
+    if (item.validTo && today > item.validTo) return false;
+    return true;
+  }
+
+  private findPlannedToday(flightNumber: string, direction: 'arrival' | 'departure') {
+    const plan = WEEKLY_PLANNED[this.getDayKey(new Date())];
+    if (!plan) return null;
+    const list = direction === 'departure' ? plan.departures : plan.arrivals;
+    const number = this.normalizeFlightNumber(flightNumber);
+    return (
+      list.find(
+        (row) =>
+          this.normalizeFlightNumber(row.flightNumber) === number && this.isPlanValidToday(row),
+      ) ?? null
+    );
+  }
+
+  private withOfficialPlan(item: ProviderFlight): ProviderFlight {
+    const planned = this.findPlannedToday(item.flightNumber, item.direction);
+    if (!planned) return item;
+    const official = this.mapPlanned(planned, item.direction);
+    return {
+      ...item,
+      airlineName: official.airlineName,
+      airlineCode: official.airlineCode,
+      city: official.city,
+      cityCode: official.cityCode,
+      scheduledTime: official.scheduledTime,
+    };
+  }
+
+  private parseAirportLocalTime(raw: string | undefined): Date | null {
+    if (!raw) return null;
+    const match = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/.exec(raw);
+    if (!match) {
+      const parsed = new Date(raw);
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
+    }
+    const [, day, hh, mm, ss] = match;
+    return new Date(`${day}T${hh}:${mm}:${ss ?? '00'}+05:00`);
+  }
+
+  private dedupeProviderFlights(items: ProviderFlight[]): ProviderFlight[] {
+    const rank: Record<string, number> = {
+      scheduled: 1,
+      checkin: 2,
+      boarding: 3,
+      delayed: 4,
+      cancelled: 4,
+      landing: 5,
+      departed: 6,
+      landed: 6,
+      arrived: 6,
+    };
+    const known = (name: string) => /flyarystan|vietjet|qazaq|hi sky|air astana|scat/i.test(name);
+    const byKey = new Map<string, ProviderFlight>();
+
+    for (const item of items) {
+      const key = `${item.flightNumber}|${item.direction}`;
+      const current = byKey.get(key);
+      if (!current) {
+        byKey.set(key, item);
+        continue;
+      }
+      if (known(item.airlineName) !== known(current.airlineName)) {
+        byKey.set(key, known(item.airlineName) ? item : current);
+        continue;
+      }
+      const nextRank = rank[item.status] ?? 0;
+      const currentRank = rank[current.status] ?? 0;
+      byKey.set(key, nextRank >= currentRank ? item : current);
+    }
+
+    return [...byKey.values()];
+  }
+
   private makeTodayAt(time: string): Date {
-    const [hh, mm] = time.split(':').map((x) => Number(x));
-    const now = new Date();
-    now.setHours(hh || 0, mm || 0, 0, 0);
-    return now;
+    const [hh, mm] = time.split(':');
+    const { year, month, day } = this.airportNowParts();
+    const hours = String(Number(hh) || 0).padStart(2, '0');
+    const minutes = String(Number(mm) || 0).padStart(2, '0');
+    return new Date(`${year}-${month}-${day}T${hours}:${minutes}:00+05:00`);
   }
 
   private async seedPlannedFlightsForToday(): Promise<number> {
@@ -732,13 +884,22 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
       this.config.get<string>('FLIGHT_SYNC_SEED_PLANNED', 'true').toLowerCase() !== 'false';
     if (!seedEnabled) return 0;
 
+    const storedPlan = await this.drizzle.db.select().from(flightScheduleEntries);
+    if (storedPlan.length > 0) {
+      return this.ensureTodayFromPlan(storedPlan);
+    }
+
     const dayKey = this.getDayKey(new Date());
     const plan = WEEKLY_PLANNED[dayKey];
     if (!plan) return 0;
 
     const expected: ProviderFlight[] = [
-      ...plan.departures.map((item) => this.mapPlanned(item, 'departure')),
-      ...plan.arrivals.map((item) => this.mapPlanned(item, 'arrival')),
+      ...plan.departures
+        .filter((item) => this.isPlanValidToday(item))
+        .map((item) => this.mapPlanned(item, 'departure')),
+      ...plan.arrivals
+        .filter((item) => this.isPlanValidToday(item))
+        .map((item) => this.mapPlanned(item, 'arrival')),
     ];
 
     let seeded = 0;
@@ -748,22 +909,16 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
 
       const existing = await this.findExisting(item);
       if (existing) {
-        if (this.wasManuallyManaged(existing)) {
-          continue;
-        }
-
-        const shouldRefresh =
-          !this.isToday(existing.scheduledTime) ||
-          (existing.estimatedTime === null &&
-            existing.status === 'scheduled' &&
-            item.scheduledTime.getTime() <= Date.now());
-
-        if (shouldRefresh && existing.estimatedTime === null && existing.gate === null) {
+        if (!existing.scheduleLocked) {
           const [updated] = await this.drizzle.db
             .update(flights)
             .set({
+              airlineName: item.airlineName,
+              airlineCode: item.airlineCode,
+              city: item.city,
+              cityCode: item.cityCode,
               scheduledTime: item.scheduledTime,
-              status: this.mapPlannedStatus(item.direction, item.scheduledTime),
+              scheduleLocked: true,
               updatedAt: new Date(),
             })
             .where(eq(flights.id, existing.id))
@@ -788,6 +943,7 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
           scheduledTime: item.scheduledTime,
           estimatedTime: item.estimatedTime,
           status: this.mapPlannedStatus(item.direction, item.scheduledTime),
+          scheduleLocked: true,
         })
         .returning();
 
@@ -835,5 +991,313 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
       estimatedTime: null,
       status: this.mapPlannedStatus(direction, scheduledTime),
     };
+  }
+
+  async triggerSync() {
+    if (this.inProgress) {
+      return { ok: true, skipped: true };
+    }
+    await this.runSync();
+    return { ok: true, skipped: false };
+  }
+
+  async getScheduleBoard() {
+    await this.ensureScheduleStorage();
+    const [board] = await this.drizzle.db
+      .select()
+      .from(scheduleBoard)
+      .where(eq(scheduleBoard.id, 1))
+      .limit(1);
+    const stored = await this.drizzle.db.select().from(flightScheduleEntries);
+    const entries =
+      stored.length > 0
+        ? stored.map((row) => ({
+            id: row.id,
+            weekday: row.weekday,
+            flightNumber: row.flightNumber,
+            direction: row.direction,
+            city: row.city,
+            time: row.planTime,
+          }))
+        : this.defaultScheduleEntries();
+
+    return {
+      source: stored.length > 0 ? 'custom' : 'default',
+      photoUrl: board?.photoUrl ?? null,
+      entries,
+    };
+  }
+
+  async saveSchedulePhoto(photoUrl: string) {
+    await this.ensureScheduleStorage();
+    await this.drizzle.db
+      .insert(scheduleBoard)
+      .values({ id: 1, photoUrl, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: scheduleBoard.id,
+        set: { photoUrl, updatedAt: new Date() },
+      });
+    return { photoUrl };
+  }
+
+  async saveSchedulePlan(
+    rawEntries: Array<{
+      weekday: number;
+      flightNumber: string;
+      direction: string;
+      city: string;
+      time: string;
+    }>,
+  ) {
+    await this.ensureScheduleStorage();
+    const entries = rawEntries.map((entry) => this.normalizePlanEntry(entry));
+
+    await this.drizzle.db.transaction(async (tx) => {
+      await tx.delete(flightScheduleEntries);
+      if (entries.length > 0) {
+        await tx.insert(flightScheduleEntries).values(
+          entries.map((entry) => ({
+            weekday: entry.weekday,
+            flightNumber: entry.flightNumber,
+            direction: entry.direction,
+            city: entry.city,
+            planTime: entry.time,
+          })),
+        );
+      }
+    });
+
+    await this.reloadAllowedRoutes();
+    const applied = await this.applyPlanTimesForToday(entries);
+    return { saved: entries.length, applied };
+  }
+
+  private async ensureScheduleStorage() {
+    await this.drizzle.db.execute(sql`
+      ALTER TABLE flights
+      ADD COLUMN IF NOT EXISTS schedule_locked boolean NOT NULL DEFAULT false
+    `);
+    await this.drizzle.db.execute(sql`
+      CREATE TABLE IF NOT EXISTS flight_schedule_entries (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        weekday smallint NOT NULL,
+        flight_number varchar(32) NOT NULL,
+        direction flight_direction NOT NULL,
+        city varchar(120) NOT NULL,
+        plan_time varchar(5) NOT NULL
+      )
+    `);
+    await this.drizzle.db.execute(sql`
+      CREATE TABLE IF NOT EXISTS schedule_board (
+        id integer PRIMARY KEY,
+        photo_url text,
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await this.drizzle.db.execute(sql`
+      INSERT INTO schedule_board (id, photo_url, updated_at)
+      VALUES (1, NULL, now())
+      ON CONFLICT (id) DO NOTHING
+    `);
+  }
+
+  private async reloadAllowedRoutes() {
+    this.configureAllowedRoutes();
+    const [planRows, lockedRows] = await Promise.all([
+      this.drizzle.db.select().from(flightScheduleEntries),
+      this.drizzle.db.select().from(flights).where(eq(flights.scheduleLocked, true)),
+    ]);
+
+    for (const row of [...planRows, ...lockedRows]) {
+      const flightNumber = this.normalizeFlightNumber(row.flightNumber);
+      const city = this.normalizeCity(row.city);
+      this.allowedRouteKeys.add(`${flightNumber}|${row.direction}|${city}`);
+      this.allowedFlightDirectionKeys.add(`${flightNumber}|${row.direction}`);
+    }
+  }
+
+  private defaultScheduleEntries() {
+    const dayToWeekday: Record<keyof typeof WEEKLY_PLANNED, number> = {
+      sun: 0,
+      mon: 1,
+      tue: 2,
+      wed: 3,
+      thu: 4,
+      fri: 5,
+      sat: 6,
+    };
+
+    const entries: Array<{
+      id: null;
+      weekday: number;
+      flightNumber: string;
+      direction: 'arrival' | 'departure';
+      city: string;
+      time: string;
+    }> = [];
+
+    for (const [day, plan] of Object.entries(WEEKLY_PLANNED) as Array<
+      [keyof typeof WEEKLY_PLANNED, (typeof WEEKLY_PLANNED)[keyof typeof WEEKLY_PLANNED]]
+    >) {
+      for (const item of plan.departures) {
+        entries.push({
+          id: null,
+          weekday: dayToWeekday[day],
+          flightNumber: item.flightNumber,
+          direction: 'departure',
+          city: item.city,
+          time: item.time,
+        });
+      }
+      for (const item of plan.arrivals) {
+        entries.push({
+          id: null,
+          weekday: dayToWeekday[day],
+          flightNumber: item.flightNumber,
+          direction: 'arrival',
+          city: item.city,
+          time: item.time,
+        });
+      }
+    }
+
+    return entries;
+  }
+
+  private normalizePlanEntry(entry: {
+    weekday: number;
+    flightNumber: string;
+    direction: string;
+    city: string;
+    time: string;
+  }) {
+    const weekday = Number(entry.weekday);
+    const flightNumber = this.normalizeFlightNumber(entry.flightNumber ?? '');
+    const city = String(entry.city ?? '').trim();
+    const time = String(entry.time ?? '').trim();
+    const direction = entry.direction === 'arrival' ? 'arrival' : 'departure';
+
+    if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) {
+      throw new BadRequestException('Некорректный день недели');
+    }
+    if (!flightNumber) {
+      throw new BadRequestException('Укажите номер рейса');
+    }
+    if (!city) {
+      throw new BadRequestException('Укажите город');
+    }
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
+      throw new BadRequestException(`Некорректное время у рейса ${flightNumber}`);
+    }
+
+    return { weekday, flightNumber, direction, city, time } as const;
+  }
+
+  private async ensureTodayFromPlan(
+    rows: Array<{
+      weekday: number;
+      flightNumber: string;
+      direction: 'arrival' | 'departure';
+      city: string;
+      planTime: string;
+    }>,
+  ) {
+    const weekday = this.airportWeekday();
+    let seeded = 0;
+
+    for (const row of rows.filter((item) => item.weekday === weekday)) {
+      const item = this.mapPlanned(
+        { flightNumber: row.flightNumber, city: row.city, time: row.planTime },
+        row.direction,
+      );
+      const existing = await this.findExisting(item);
+      if (existing) continue;
+
+      const [created] = await this.drizzle.db
+        .insert(flights)
+        .values({
+          flightNumber: item.flightNumber,
+          airlineName: item.airlineName,
+          airlineCode: item.airlineCode,
+          direction: item.direction,
+          city: item.city,
+          cityCode: item.cityCode,
+          terminal: item.terminal,
+          gate: item.gate,
+          sector: null,
+          scheduledTime: item.scheduledTime,
+          estimatedTime: null,
+          status: this.mapPlannedStatus(item.direction, item.scheduledTime),
+          scheduleLocked: true,
+        })
+        .returning();
+      this.events.publish({ type: 'created', payload: created });
+      seeded += 1;
+    }
+
+    return seeded;
+  }
+
+  private async applyPlanTimesForToday(
+    entries: Array<{
+      weekday: number;
+      flightNumber: string;
+      direction: 'arrival' | 'departure';
+      city: string;
+      time: string;
+    }>,
+  ) {
+    const weekday = this.airportWeekday();
+    let applied = 0;
+
+    for (const entry of entries.filter((item) => item.weekday === weekday)) {
+      const item = this.mapPlanned(
+        { flightNumber: entry.flightNumber, city: entry.city, time: entry.time },
+        entry.direction,
+      );
+      const existing = await this.findExisting(item);
+
+      if (existing) {
+        const [updated] = await this.drizzle.db
+          .update(flights)
+          .set({
+            flightNumber: item.flightNumber,
+            airlineName: item.airlineName,
+            airlineCode: item.airlineCode,
+            city: item.city,
+            cityCode: item.cityCode,
+            scheduledTime: item.scheduledTime,
+            scheduleLocked: true,
+            updatedAt: new Date(),
+          })
+          .where(eq(flights.id, existing.id))
+          .returning();
+        this.events.publish({ type: 'updated', payload: updated });
+      } else {
+        const [created] = await this.drizzle.db
+          .insert(flights)
+          .values({
+            flightNumber: item.flightNumber,
+            airlineName: item.airlineName,
+            airlineCode: item.airlineCode,
+            direction: item.direction,
+            city: item.city,
+            cityCode: item.cityCode,
+            terminal: '1',
+            gate: null,
+            sector: null,
+            scheduledTime: item.scheduledTime,
+            estimatedTime: null,
+            status: this.mapPlannedStatus(item.direction, item.scheduledTime),
+            scheduleLocked: true,
+          })
+          .returning();
+        this.events.publish({ type: 'created', payload: created });
+      }
+
+      applied += 1;
+    }
+
+    return applied;
   }
 }

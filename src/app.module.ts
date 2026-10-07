@@ -16,6 +16,7 @@ import { ServicePhotosModule } from './service-photos/service-photos.module';
 import { PartnerDocumentsModule } from './partner-documents/partner-documents.module';
 import { FeedbackModule } from './feedback/feedback.module';
 import { FuelStorageModule } from './fuel-storage/fuel-storage.module';
+import { AirlinesModule } from './airlines/airlines.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { FuelStorageModule } from './fuel-storage/fuel-storage.module';
     PartnerDocumentsModule,
     FeedbackModule,
     FuelStorageModule,
+    AirlinesModule,
   ],
   providers: [
     {

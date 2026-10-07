@@ -4,6 +4,7 @@ import {
   integer,
   pgEnum,
   pgTable,
+  smallint,
   text,
   timestamp,
   uniqueIndex,
@@ -68,9 +69,46 @@ export const flights = pgTable('flights', {
   scheduledTime: timestamp('scheduled_time', { withTimezone: true }).notNull(),
   estimatedTime: timestamp('estimated_time', { withTimezone: true }),
   status: flightStatusEnum('status').notNull().default('scheduled'),
+  scheduleLocked: boolean('schedule_locked').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true })
     .defaultNow()
     .notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
+export const flightScheduleEntries = pgTable('flight_schedule_entries', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  weekday: smallint('weekday').notNull(),
+  flightNumber: varchar('flight_number', { length: 32 }).notNull(),
+  direction: flightDirectionEnum('direction').notNull(),
+  city: varchar('city', { length: 120 }).notNull(),
+  planTime: varchar('plan_time', { length: 5 }).notNull(),
+});
+
+export const airlines = pgTable(
+  'airlines',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    name: varchar('name', { length: 120 }).notNull(),
+    code: varchar('code', { length: 8 }).notNull(),
+    logoUrl: text('logo_url'),
+    websiteUrl: text('website_url'),
+    description: varchar('description', { length: 255 }),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    airlinesCodeUnique: uniqueIndex('airlines_code_unique').on(table.code),
+  }),
+);
+
+export const scheduleBoard = pgTable('schedule_board', {
+  id: integer('id').primaryKey(),
+  photoUrl: text('photo_url'),
   updatedAt: timestamp('updated_at', { withTimezone: true })
     .defaultNow()
     .notNull(),
