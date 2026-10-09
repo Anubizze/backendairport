@@ -17,6 +17,7 @@ import { PartnerDocumentsModule } from './partner-documents/partner-documents.mo
 import { FeedbackModule } from './feedback/feedback.module';
 import { FuelStorageModule } from './fuel-storage/fuel-storage.module';
 import { AirlinesModule } from './airlines/airlines.module';
+import { ServicePricesModule } from './service-prices/service-prices.module';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { AirlinesModule } from './airlines/airlines.module';
     FeedbackModule,
     FuelStorageModule,
     AirlinesModule,
+    ServicePricesModule,
   ],
   providers: [
     {

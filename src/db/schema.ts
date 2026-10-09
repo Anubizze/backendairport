@@ -106,6 +106,14 @@ export const airlines = pgTable(
   }),
 );
 
+export const servicePriceContent = pgTable('service_price_content', {
+  id: integer('id').primaryKey(),
+  payload: text('payload').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
 export const scheduleBoard = pgTable('schedule_board', {
   id: integer('id').primaryKey(),
   photoUrl: text('photo_url'),
