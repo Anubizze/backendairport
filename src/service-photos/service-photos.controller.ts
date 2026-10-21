@@ -5,13 +5,15 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
+  Patch,
   Post,
   UploadedFile,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
+import { diskStorage, memoryStorage } from 'multer';
 import { extname, join } from 'path';
 import { randomUUID } from 'crypto';
 
@@ -20,6 +22,7 @@ import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { isValidServiceId } from './service-ids';
 import { ServicePhotosService } from './service-photos.service';
+import { UpdateServicePhotoDto } from './dto/update-service-photo.dto';
 
 const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
@@ -90,6 +93,30 @@ export class ServicePhotosController {
       altEn,
       sortOrder: Number.isFinite(parsedSortOrder) ? parsedSortOrder : 0,
     });
+  }
+
+  @Patch(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('superadmin', 'dispatcher', 'news_editor')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: MAX_FILE_SIZE },
+      fileFilter: (_req, file, cb) => {
+        if (!ALLOWED_MIME.has(file.mimetype)) {
+          cb(new BadRequestException('Разрешены только JPEG, PNG, WebP и GIF'), false);
+          return;
+        }
+        cb(null, true);
+      },
+    }),
+  )
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateServicePhotoDto,
+    @UploadedFile() file?: Express.Multer.File,
+  ) {
+    return this.servicePhotosService.update(id, dto, file);
   }
 
   @Delete(':id')

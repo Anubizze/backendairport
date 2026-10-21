@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "nest start --watch",
     "build": "nest build",
+    "test:service-photos": "tsc -p tsconfig.build.json --incremental false && node --test test/service-photos.test.cjs",
     "start": "node dist/main.js",
     "start:dev": "nest start --watch",
     "start:prod": "node dist/main.js",

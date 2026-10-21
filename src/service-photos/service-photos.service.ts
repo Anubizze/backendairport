@@ -4,13 +4,14 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { asc, eq } from 'drizzle-orm';
-import { existsSync } from 'fs';
-import { unlink } from 'fs/promises';
-import { join } from 'path';
+import { mkdir, unlink, writeFile } from 'fs/promises';
+import { basename, join } from 'path';
+import { randomUUID } from 'crypto';
 
 import { DrizzleService } from '../db/drizzle.service';
 import { servicePhotos } from '../db/schema';
 import { isValidServiceId, normalizeServiceId } from './service-ids';
+import { UpdateServicePhotoDto } from './dto/update-service-photo.dto';
 
 export type ServicePhotoRecord = typeof servicePhotos.$inferSelect;
 
@@ -68,6 +69,58 @@ export class ServicePhotosService {
     return created;
   }
 
+  async update(id: string, params: UpdateServicePhotoDto, file?: Express.Multer.File) {
+    const [existing] = await this.drizzle.db
+      .select()
+      .from(servicePhotos)
+      .where(eq(servicePhotos.id, id))
+      .limit(1);
+    if (!existing) throw new NotFoundException('Фото не найдено');
+
+    const serviceId = normalizeServiceId(params.serviceId ?? existing.serviceId);
+    if (!isValidServiceId(serviceId)) throw new BadRequestException('Неизвестная услуга');
+
+    let url = existing.url;
+    if (file) {
+      const extensions: Record<string, string> = {
+        'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif',
+      };
+      const extension = extensions[file.mimetype];
+      if (!extension) throw new BadRequestException('Недопустимый формат изображения');
+      const directory = join(process.cwd(), 'uploads', 'services');
+      await mkdir(directory, { recursive: true });
+      const filename = `${randomUUID()}${extension}`;
+      await writeFile(join(directory, filename), file.buffer);
+      url = `/uploads/services/${filename}`;
+    }
+
+    let updated: ServicePhotoRecord;
+    try {
+      [updated] = await this.drizzle.db.update(servicePhotos).set({
+        serviceId,
+        url,
+        altRu: params.altRu === undefined ? existing.altRu : params.altRu?.trim() || null,
+        altKz: params.altKz === undefined ? existing.altKz : params.altKz?.trim() || null,
+        altEn: params.altEn === undefined ? existing.altEn : params.altEn?.trim() || null,
+        sortOrder: params.sortOrder ?? existing.sortOrder,
+      }).where(eq(servicePhotos.id, id)).returning();
+      if (!updated) throw new NotFoundException('Фото не найдено');
+    } catch (error) {
+      if (file) await this.removeLocalFile(url);
+      throw error;
+    }
+    if (file && url !== existing.url) await this.removeLocalFile(existing.url);
+    return updated;
+  }
+
+  private async removeLocalFile(url: string) {
+    const prefix = '/uploads/services/';
+    if (!url.startsWith(prefix)) return;
+    const filename = url.slice(prefix.length);
+    if (!filename || basename(filename) !== filename) return;
+    await unlink(join(process.cwd(), 'uploads', 'services', filename)).catch(() => undefined);
+  }
+
   async remove(id: string) {
     const [existing] = await this.drizzle.db
       .select()
@@ -81,11 +134,7 @@ export class ServicePhotosService {
 
     await this.drizzle.db.delete(servicePhotos).where(eq(servicePhotos.id, id));
 
-    const relativePath = existing.url.replace(/^\/uploads\//, '');
-    const absolutePath = join(process.cwd(), 'uploads', relativePath);
-    if (existsSync(absolutePath)) {
-      await unlink(absolutePath).catch(() => undefined);
-    }
+    await this.removeLocalFile(existing.url);
 
     return { success: true };
   }
