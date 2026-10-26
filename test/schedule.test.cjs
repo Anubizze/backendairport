@@ -21,6 +21,7 @@ const { RolesGuard } = require('../dist/auth/roles.guard');
 const { DEFAULT_SCHEDULE_ENTRIES } = require('../dist/flight-sync/default-schedule');
 const { parseScheduleText } = require('../dist/flight-sync/schedule-parser');
 const { normalizeScheduleEntry } = require('../dist/flight-sync/schedule-entry');
+const legacyBoard = require('./fixtures/legacySchedule.json');
 
 const days = ['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'];
 const cities = { Astana: 'Астана', Almaty: 'Алматы', Urzhar: 'Урджар' };
@@ -79,6 +80,7 @@ function memoryDatabase() {
         where(condition) { predicate = matches(condition); return this; },
         orderBy() { return this; },
         limit(value) { limit = value; return this; },
+        for() { return this; },
         then(resolve, reject) { return Promise.resolve(state[getTableName(table)].filter(predicate).slice(0, limit)).then(resolve, reject); },
       };
       return query;
@@ -107,6 +109,56 @@ function memoryDatabase() {
   };
   return { state, db };
 }
+
+test('existing database records are upgraded once and omitted fields cannot erase details', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-06T06:00:00Z') });
+  const { db, state } = memoryDatabase();
+  state.flight_schedule_entries = legacyBoard.entries.map(({ time, ...entry }) => ({ ...entry, id: randomUUID(), planTime: time }));
+  const originalIds = state.flight_schedule_entries.map((entry) => entry.id);
+  const service = new FlightSyncService({ get: (_key, fallback) => fallback }, { db }, { publish: () => {} });
+  const upgraded = await service.getScheduleBoard();
+  assert.equal(upgraded.schemaVersion, 2);
+  assert.equal(state.schedule_board[0].schemaVersion, 2);
+  assert.deepEqual(canonical(upgraded.entries), canonical(DEFAULT_SCHEDULE_ENTRIES));
+  assert.equal(state.flight_schedule_entries.filter((entry) => originalIds.includes(entry.id)).length, 48);
+
+  // A stale admin tab still sends only the five old fields.
+  const oldPayload = legacyBoard.entries.map(({ weekday, flightNumber, direction, city, time }) => ({ weekday, flightNumber, direction, city, time }));
+  await service.saveSchedulePlan(oldPayload);
+  assert.deepEqual(canonical((await service.getScheduleBoard()).entries), canonical(DEFAULT_SCHEDULE_ENTRIES));
+
+  // A time edit from an old client preserves the other fields of that slot.
+  const updated = (await service.getScheduleBoard()).entries;
+  const simple = updated.map(({ weekday, flightNumber, direction, city, time }) => ({ weekday, flightNumber, direction, city, time }));
+  const departure = simple.find((entry) => entry.weekday === 1 && entry.flightNumber === 'IQ374');
+  departure.time = '10:25';
+  await service.saveSchedulePlan(simple);
+  const edited = (await service.getScheduleBoard()).entries.find((entry) => entry.weekday === 1 && entry.flightNumber === 'IQ374');
+  assert.equal(edited.time, '10:25');
+  assert.equal(edited.counterpartTime, '11:45');
+  assert.equal(edited.validTo, '2027-03-27');
+
+  // Explicit clearing in a current client remains an intentional edit.
+  const explicit = (await service.getScheduleBoard()).entries.map((entry) => ({ ...entry }));
+  explicit[0].counterpartTime = null;
+  await service.saveSchedulePlan(explicit);
+  const restarted = new FlightSyncService({ get: (_key, fallback) => fallback }, { db }, { publish: () => {} });
+  assert.equal((await restarted.getScheduleBoard()).entries[0].counterpartTime, null);
+});
+
+test('migration preserves unrelated custom plans and explicitly saved empty plans', async () => {
+  for (const variant of ['custom', 'empty']) {
+    const { db, state } = memoryDatabase();
+    state.schedule_board[0].planSaved = true;
+    if (variant === 'custom') state.flight_schedule_entries = [{ id: randomUUID(), weekday: 1, flightNumber: 'IQ374', direction: 'departure', city: 'Astana', planTime: '10:25' }];
+    const before = structuredClone(state.flight_schedule_entries);
+    const service = new FlightSyncService({ get: (_key, fallback) => fallback }, { db }, { publish: () => {} });
+    const board = await service.getScheduleBoard();
+    assert.equal(board.source, 'custom');
+    assert.deepEqual(state.flight_schedule_entries, before);
+    assert.equal(board.entries.length, before.length);
+  }
+});
 
 test('upload → preview → save → public calendar and board, including failed recognition', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-06T06:00:00Z') });

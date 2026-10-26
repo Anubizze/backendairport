@@ -121,6 +121,7 @@ export const scheduleBoard = pgTable('schedule_board', {
   id: integer('id').primaryKey(),
   photoUrl: text('photo_url'),
   planSaved: boolean('plan_saved').notNull().default(false),
+  schemaVersion: integer('schema_version').notNull().default(0),
   updatedAt: timestamp('updated_at', { withTimezone: true })
     .defaultNow()
     .notNull(),

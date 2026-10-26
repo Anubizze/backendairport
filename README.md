@@ -28,6 +28,10 @@ Each entry includes `weekday` (Sunday = 0), `flightNumber`, `direction`, `city`,
 `time` (Semey local time), optional `counterpartTime`, `validFrom` and `validTo`
 (`YYYY-MM-DD`). Repeated flight numbers at different times are separate occurrences.
 Empty plans remain empty across restarts. Invalid images leave the existing plan intact.
+Responses include `schemaVersion: 2`. Startup upgrades the exact known legacy
+winter plan with missing metadata, including its duplicated Saturday IQ pair and
+missing Friday extras. Other custom plans are retained. Writes from old clients
+preserve omitted metadata fields; explicitly supplied empty values clear them.
 
 After updating, install dependencies from `pnpm-lock.yaml`, build and restart the
 API. Node.js 20.9 or newer is required by Sharp. Schema additions are applied once

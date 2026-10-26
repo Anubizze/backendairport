@@ -13,6 +13,7 @@ import { flightScheduleEntries, flights, scheduleBoard } from '../db/schema';
 import { FlightsEventsService } from '../flights/flights.events';
 import { DEFAULT_SCHEDULE_ENTRIES } from './default-schedule';
 import { normalizeScheduleEntry, ScheduleEntry } from './schedule-entry';
+import { upgradeLegacyWinterSchedule } from './legacy-schedule';
 
 class AviationStackRateLimitError extends Error {
   constructor(public readonly retryAfterMs: number) {
@@ -833,6 +834,7 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
         : this.defaultScheduleEntries();
 
     return {
+      schemaVersion: 2,
       source: custom ? 'custom' : 'default',
       photoUrl: board?.photoUrl ?? null,
       entries,
@@ -848,11 +850,24 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
     if (photoUrl !== undefined && (typeof photoUrl !== 'string' || (photoUrl !== '' && !/^\/api\/uploads\/schedules\/[\w-]+\.(jpg|jpeg|png|webp|gif)$/.test(photoUrl)))) {
       throw new BadRequestException('Некорректный адрес фото расписания');
     }
-    const entries = rawEntries.map(normalizeScheduleEntry);
+    const previous = (await this.getScheduleBoard()).entries;
+    const normalized = rawEntries.map(normalizeScheduleEntry);
+    const detailFields = ['counterpartTime', 'validFrom', 'validTo'] as const;
+    const legacyPayload = rawEntries.every((value) => detailFields.every((field) => !Object.prototype.hasOwnProperty.call(value, field)));
+    const legacy = legacyPayload ? upgradeLegacyWinterSchedule(normalized) : null;
+    const entries = legacy ?? normalized.map((entry, index) => {
+      const candidates = previous.filter((old) => old.weekday === entry.weekday && old.direction === entry.direction
+        && old.flightNumber === entry.flightNumber && this.normalizeCity(old.city) === this.normalizeCity(entry.city));
+      const existing = candidates.find((old) => old.time === entry.time) ?? (candidates.length === 1 ? candidates[0] : null);
+      if (!existing) return entry;
+      const raw = rawEntries[index] as Record<string, unknown>;
+      return {
+        ...entry,
+        ...Object.fromEntries(detailFields.filter((field) => !Object.prototype.hasOwnProperty.call(raw, field)).map((field) => [field, existing[field]])),
+      };
+    });
     const keys = entries.map((entry) => `${entry.weekday}|${entry.direction}|${entry.flightNumber}|${entry.time}|${entry.validFrom}|${entry.validTo}`);
     if (new Set(keys).size !== keys.length) throw new BadRequestException('В расписании есть одинаковые рейсы');
-    const previous = (await this.getScheduleBoard()).entries;
-
     await this.drizzle.db.transaction(async (tx) => {
       await tx.delete(flightScheduleEntries);
       if (entries.length > 0) {
@@ -869,7 +884,7 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
           })),
         );
       }
-      await tx.update(scheduleBoard).set({ planSaved: true, updatedAt: new Date(), ...(photoUrl !== undefined ? { photoUrl: photoUrl || null } : {}) }).where(eq(scheduleBoard.id, 1));
+      await tx.update(scheduleBoard).set({ planSaved: true, schemaVersion: 2, updatedAt: new Date(), ...(photoUrl !== undefined ? { photoUrl: photoUrl || null } : {}) }).where(eq(scheduleBoard.id, 1));
     });
 
     await this.reloadAllowedRoutes();
@@ -908,11 +923,50 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
     await this.drizzle.db.execute(sql`ALTER TABLE flight_schedule_entries ADD COLUMN IF NOT EXISTS valid_from varchar(10)`);
     await this.drizzle.db.execute(sql`ALTER TABLE flight_schedule_entries ADD COLUMN IF NOT EXISTS valid_to varchar(10)`);
     await this.drizzle.db.execute(sql`ALTER TABLE schedule_board ADD COLUMN IF NOT EXISTS plan_saved boolean NOT NULL DEFAULT false`);
+    await this.drizzle.db.execute(sql`ALTER TABLE schedule_board ADD COLUMN IF NOT EXISTS schema_version integer NOT NULL DEFAULT 0`);
     await this.drizzle.db.execute(sql`
       INSERT INTO schedule_board (id, photo_url, updated_at)
       VALUES (1, NULL, now())
       ON CONFLICT (id) DO NOTHING
     `);
+    await this.migrateLegacySchedule();
+  }
+
+  private async migrateLegacySchedule() {
+    const upgradedCount = await this.drizzle.db.transaction(async (tx) => {
+      const [board] = await tx.select().from(scheduleBoard).where(eq(scheduleBoard.id, 1)).for('update');
+      if (!board || board.schemaVersion >= 2) return 0;
+      const rows = await tx.select().from(flightScheduleEntries);
+      const entries = rows.map((row) => ({ ...row, time: row.planTime }));
+      const upgraded = upgradeLegacyWinterSchedule(entries);
+      if (upgraded) {
+        const retained = new Set(upgraded.map((entry) => entry.id).filter(Boolean));
+        for (const row of rows) {
+          if (!retained.has(row.id)) await tx.delete(flightScheduleEntries).where(eq(flightScheduleEntries.id, row.id));
+        }
+        for (const entry of upgraded) {
+          const details = {
+            flightNumber: entry.flightNumber,
+            counterpartTime: entry.counterpartTime,
+            validFrom: entry.validFrom,
+            validTo: entry.validTo,
+          };
+          if (entry.id) {
+            await tx.update(flightScheduleEntries).set(details).where(eq(flightScheduleEntries.id, entry.id));
+          } else {
+            await tx.insert(flightScheduleEntries).values({ ...details, weekday: entry.weekday, direction: entry.direction, city: entry.city, planTime: entry.time });
+          }
+          const old = rows.find((row) => row.id === entry.id);
+          if (old && entry.weekday === this.airportWeekday() && entry.flightNumber !== old.flightNumber) {
+            await tx.update(flights).set({ flightNumber: entry.flightNumber, updatedAt: new Date() })
+              .where(and(eq(flights.flightNumber, old.flightNumber), eq(flights.direction, entry.direction), eq(flights.scheduledTime, this.makeTodayAt(entry.time))));
+          }
+        }
+      }
+      await tx.update(scheduleBoard).set({ schemaVersion: 2, ...(upgraded ? { planSaved: true, updatedAt: new Date() } : {}) }).where(eq(scheduleBoard.id, 1));
+      return upgraded?.length ?? 0;
+    });
+    if (upgradedCount) this.logger.log(`Restored full times and periods for ${upgradedCount} legacy winter schedule entries`);
   }
 
   private async reloadAllowedRoutes() {
