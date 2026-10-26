@@ -1,5 +1,20 @@
 ## Backend (NestJS + Drizzle + PostgreSQL + Redis)
 
+### Dokploy deployment with Dockerfile
+
+Use **Build Type → Dockerfile** for this repository. Set **Dockerfile = Dockerfile**
+and **Docker Context Path = .** (repository root), save and deploy. The application
+port is **4000**. Keep the existing environment variables and uploads volume;
+the container stores uploads at `/app/uploads`. If the existing volume targets a
+different container path, attach that same volume at `/app/uploads` before deploying.
+
+The image uses Node.js 22 from Docker Hub and installs the pinned pnpm version.
+It does not pull `ghcr.io/railwayapp/nixpacks`. A TLS handshake timeout when pulling
+that Nixpacks image happens before application installation or compilation.
+Changing `engines.node` alone does not fix connectivity to GHCR; select Dockerfile
+to use the build supplied here. GitHub Actions builds the image and checks the
+production image-processing dependencies and both local OCR models on each push.
+
 ### Timetable photo import
 
 `GET /api/schedule` is public and returns the published weekly plan. The write

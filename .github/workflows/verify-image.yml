@@ -1,0 +1,53 @@
+name: Verify backend image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-backend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Build production image
+        run: docker build --tag airport-backend:check .
+
+      - name: Verify runtime, image processing and local OCR models
+        run: |
+          docker run --rm --interactive airport-backend:check node <<'NODE'
+          const assert = require('node:assert/strict');
+          const { mkdtemp, copyFile, rm } = require('node:fs/promises');
+          const { tmpdir } = require('node:os');
+          const { join, dirname } = require('node:path');
+          const sharp = require('sharp');
+          const { createWorker } = require('tesseract.js');
+          require('./dist/app.module');
+          (async () => {
+            assert.equal(process.versions.node.split('.')[0], '22');
+            const png = await sharp({ create: { width: 16, height: 16, channels: 3, background: 'white' } }).png().toBuffer();
+            assert.ok(png.length);
+            const langPath = await mkdtemp(join(tmpdir(), 'schedule-ocr-'));
+            let worker;
+            try {
+              for (const code of ['rus', 'eng']) {
+                await copyFile(join(dirname(require.resolve(`@tesseract.js-data/${code}`)), '4.0.0_best_int', `${code}.traineddata.gz`), join(langPath, `${code}.traineddata.gz`));
+              }
+              worker = await createWorker(['rus', 'eng'], 1, { langPath, cacheMethod: 'none', errorHandler: (error) => { console.error(String(error).slice(0, 500)); process.exitCode = 1; } });
+              console.log('Node 22, production dependencies, Sharp and local OCR models are ready.');
+            } finally {
+              await worker?.terminate();
+              await rm(langPath, { recursive: true, force: true });
+            }
+          })().catch((error) => { console.error(error); process.exitCode = 1; });
+          NODE

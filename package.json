@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "description": "Backend API for Semey airport portal",
+  "engines": {
+    "node": "22.x"
+  },
+  "packageManager": "pnpm@10.24.0",
   "scripts": {
     "dev": "nest start --watch",
     "build": "nest build",
