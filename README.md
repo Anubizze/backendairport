@@ -1,5 +1,30 @@
 ## Backend (NestJS + Drizzle + PostgreSQL + Redis)
 
+### Timetable photo import
+
+`GET /api/schedule` is public and returns the published weekly plan. The write
+endpoints (`PUT /api/schedule`, `POST /api/schedule/photo`, `POST /api/schedule/sync`)
+require a dispatcher or superadmin session.
+
+Photo upload accepts JPEG, PNG, WebP or GIF up to 8 MB. It returns a draft
+`{ photoUrl, entries, warnings }`; it does not change the published board. Save
+the reviewed entries and `photoUrl` together with `PUT /api/schedule` to publish.
+Each entry includes `weekday` (Sunday = 0), `flightNumber`, `direction`, `city`,
+`time` (Semey local time), optional `counterpartTime`, `validFrom` and `validTo`
+(`YYYY-MM-DD`). Repeated flight numbers at different times are separate occurrences.
+Empty plans remain empty across restarts. Invalid images leave the existing plan intact.
+
+After updating, install dependencies from `pnpm-lock.yaml`, build and restart the
+API. Node.js 20.9 or newer is required by Sharp. Schema additions are applied once
+at startup by `FlightSyncService`; no separate manual SQL step is needed.
+Tesseract uses the packaged Russian and English models with no runtime downloads
+or external OCR API key. Keep `uploads/` persistent and writable.
+
+Run `npm run test:schedule` for parser validation and a local HTTP integration
+test with real PNG recognition, preview, saving, public reads and failed uploads.
+PostgreSQL uses an in-memory boundary; access guards simulate dispatcher and
+unauthorized sessions. No production data is accessed.
+
 This folder now contains a ready backend skeleton for the tender scope:
 
 - NestJS API (`/api/*`)

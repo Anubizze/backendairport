@@ -85,6 +85,9 @@ export const flightScheduleEntries = pgTable('flight_schedule_entries', {
   direction: flightDirectionEnum('direction').notNull(),
   city: varchar('city', { length: 120 }).notNull(),
   planTime: varchar('plan_time', { length: 5 }).notNull(),
+  counterpartTime: varchar('counterpart_time', { length: 5 }),
+  validFrom: varchar('valid_from', { length: 10 }),
+  validTo: varchar('valid_to', { length: 10 }),
 });
 
 export const airlines = pgTable(
@@ -117,6 +120,7 @@ export const servicePriceContent = pgTable('service_price_content', {
 export const scheduleBoard = pgTable('schedule_board', {
   id: integer('id').primaryKey(),
   photoUrl: text('photo_url'),
+  planSaved: boolean('plan_saved').notNull().default(false),
   updatedAt: timestamp('updated_at', { withTimezone: true })
     .defaultNow()
     .notNull(),

@@ -11,6 +11,8 @@ import { and, desc, eq, lt, sql } from 'drizzle-orm';
 import { DrizzleService } from '../db/drizzle.service';
 import { flightScheduleEntries, flights, scheduleBoard } from '../db/schema';
 import { FlightsEventsService } from '../flights/flights.events';
+import { DEFAULT_SCHEDULE_ENTRIES } from './default-schedule';
+import { normalizeScheduleEntry, ScheduleEntry } from './schedule-entry';
 
 class AviationStackRateLimitError extends Error {
   constructor(public readonly retryAfterMs: number) {
@@ -41,14 +43,6 @@ type ProviderFlight = {
     | 'arrived';
 };
 
-type PlannedSlot = {
-  flightNumber: string;
-  city: string;
-  time: string;
-  validFrom?: string;
-  validTo?: string;
-};
-
 const DEFAULT_ALLOWED_ROUTES: Array<{
   flightNumber: string;
   direction: 'arrival' | 'departure';
@@ -67,101 +61,6 @@ const DEFAULT_ALLOWED_ROUTES: Array<{
   { flightNumber: 'KC7153', direction: 'arrival', city: 'almaty' },
   { flightNumber: 'FS7153', direction: 'arrival', city: 'almaty' },
 ];
-
-const WEEKLY_PLANNED: Record<
-  string,
-  {
-    departures: PlannedSlot[];
-    arrivals: PlannedSlot[];
-  }
-> = {
-  mon: {
-    departures: [
-      { flightNumber: 'IQ374', city: 'Astana', time: '09:45', validFrom: '2026-08-03', validTo: '2026-10-24' },
-      { flightNumber: 'FS7152', city: 'Almaty', time: '13:35', validFrom: '2026-03-29', validTo: '2026-10-25' },
-      { flightNumber: 'FS7352', city: 'Astana', time: '16:20', validFrom: '2026-06-01', validTo: '2026-10-25' },
-    ],
-    arrivals: [
-      { flightNumber: 'IQ373', city: 'Astana', time: '09:20', validFrom: '2026-08-03', validTo: '2026-10-24' },
-      { flightNumber: 'FS7151', city: 'Almaty', time: '13:05', validFrom: '2026-03-29', validTo: '2026-10-25' },
-      { flightNumber: 'FS7351', city: 'Astana', time: '15:50', validFrom: '2026-06-01', validTo: '2026-10-25' },
-    ],
-  },
-  tue: {
-    departures: [
-      { flightNumber: 'IH3107', city: 'Urzhar', time: '09:10', validFrom: '2026-06-01', validTo: '2026-10-31' },
-      { flightNumber: 'FS7152', city: 'Almaty', time: '13:35', validFrom: '2026-03-29', validTo: '2026-10-25' },
-      { flightNumber: 'FS7352', city: 'Astana', time: '16:20', validFrom: '2026-06-01', validTo: '2026-10-25' },
-      { flightNumber: 'KC7154', city: 'Almaty', time: '17:55', validFrom: '2026-10-06', validTo: '2026-10-20' },
-    ],
-    arrivals: [
-      { flightNumber: 'IH3108', city: 'Urzhar', time: '12:20', validFrom: '2026-06-01', validTo: '2026-10-31' },
-      { flightNumber: 'FS7151', city: 'Almaty', time: '13:05', validFrom: '2026-03-29', validTo: '2026-10-25' },
-      { flightNumber: 'FS7351', city: 'Astana', time: '15:50', validFrom: '2026-06-01', validTo: '2026-10-25' },
-      { flightNumber: 'KC7153', city: 'Almaty', time: '17:25', validFrom: '2026-10-06', validTo: '2026-10-20' },
-    ],
-  },
-  wed: {
-    departures: [
-      { flightNumber: 'IQ374', city: 'Astana', time: '09:45', validFrom: '2026-08-03', validTo: '2026-10-24' },
-      { flightNumber: 'FS7152', city: 'Almaty', time: '13:35', validFrom: '2026-03-29', validTo: '2026-10-25' },
-      { flightNumber: 'FS7352', city: 'Astana', time: '16:20', validFrom: '2026-06-01', validTo: '2026-10-25' },
-    ],
-    arrivals: [
-      { flightNumber: 'IQ373', city: 'Astana', time: '09:20', validFrom: '2026-08-03', validTo: '2026-10-24' },
-      { flightNumber: 'FS7151', city: 'Almaty', time: '13:05', validFrom: '2026-03-29', validTo: '2026-10-25' },
-      { flightNumber: 'FS7351', city: 'Astana', time: '15:50', validFrom: '2026-06-01', validTo: '2026-10-25' },
-    ],
-  },
-  thu: {
-    departures: [
-      { flightNumber: 'FS7152', city: 'Almaty', time: '13:35', validFrom: '2026-03-29', validTo: '2026-10-25' },
-      { flightNumber: 'FS7352', city: 'Astana', time: '16:20', validFrom: '2026-06-01', validTo: '2026-10-25' },
-    ],
-    arrivals: [
-      { flightNumber: 'FS7151', city: 'Almaty', time: '13:05', validFrom: '2026-03-29', validTo: '2026-10-25' },
-      { flightNumber: 'FS7351', city: 'Astana', time: '15:50', validFrom: '2026-06-01', validTo: '2026-10-25' },
-    ],
-  },
-  fri: {
-    departures: [
-      { flightNumber: 'IH3107', city: 'Urzhar', time: '09:10', validFrom: '2026-06-12', validTo: '2026-10-31' },
-      { flightNumber: 'IQ374', city: 'Astana', time: '09:45', validFrom: '2026-08-03', validTo: '2026-10-24' },
-      { flightNumber: 'FS7152', city: 'Almaty', time: '13:35', validFrom: '2026-03-29', validTo: '2026-10-25' },
-      { flightNumber: 'FS7352', city: 'Astana', time: '16:20', validFrom: '2026-06-01', validTo: '2026-10-25' },
-      { flightNumber: 'FS7154', city: 'Almaty', time: '17:50', validFrom: '2026-04-03', validTo: '2026-10-23' },
-    ],
-    arrivals: [
-      { flightNumber: 'IQ373', city: 'Astana', time: '09:20', validFrom: '2026-08-03', validTo: '2026-10-24' },
-      { flightNumber: 'IH3108', city: 'Urzhar', time: '12:20', validFrom: '2026-06-12', validTo: '2026-10-31' },
-      { flightNumber: 'FS7151', city: 'Almaty', time: '13:05', validFrom: '2026-03-29', validTo: '2026-10-25' },
-      { flightNumber: 'FS7351', city: 'Astana', time: '15:50', validFrom: '2026-06-01', validTo: '2026-10-25' },
-      { flightNumber: 'FS7153', city: 'Almaty', time: '17:20', validFrom: '2026-04-03', validTo: '2026-10-23' },
-    ],
-  },
-  sat: {
-    departures: [
-      { flightNumber: 'FS7152', city: 'Almaty', time: '13:35', validFrom: '2026-03-29', validTo: '2026-10-25' },
-      { flightNumber: 'FS7352', city: 'Astana', time: '16:20', validFrom: '2026-06-01', validTo: '2026-10-25' },
-    ],
-    arrivals: [
-      { flightNumber: 'FS7151', city: 'Almaty', time: '13:05', validFrom: '2026-03-29', validTo: '2026-10-25' },
-      { flightNumber: 'FS7351', city: 'Astana', time: '15:50', validFrom: '2026-06-01', validTo: '2026-10-25' },
-    ],
-  },
-  sun: {
-    departures: [
-      { flightNumber: 'IQ374', city: 'Astana', time: '09:45', validFrom: '2026-08-03', validTo: '2026-10-24' },
-      { flightNumber: 'FS7152', city: 'Almaty', time: '13:35', validFrom: '2026-03-29', validTo: '2026-10-25' },
-      { flightNumber: 'FS7352', city: 'Astana', time: '16:20', validFrom: '2026-06-01', validTo: '2026-10-25' },
-    ],
-    arrivals: [
-      { flightNumber: 'IQ373', city: 'Astana', time: '09:20', validFrom: '2026-08-03', validTo: '2026-10-24' },
-      { flightNumber: 'FS7151', city: 'Almaty', time: '13:05', validFrom: '2026-03-29', validTo: '2026-10-25' },
-      { flightNumber: 'FS7351', city: 'Astana', time: '15:50', validFrom: '2026-06-01', validTo: '2026-10-25' },
-    ],
-  },
-};
 
 const CITY_CODE_BY_NAME: Record<string, string> = {
   astana: 'NQZ',
@@ -216,6 +115,8 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
   private rateLimitedUntilMs = 0;
   private syncCycleIndex = 0;
   private isStartupSync = true;
+  private storageReady: Promise<void> | null = null;
+  private activeSchedule: ScheduleEntry[] = DEFAULT_SCHEDULE_ENTRIES;
   private allowedRouteKeys = new Set<string>();
   private allowedFlightDirectionKeys = new Set<string>();
 
@@ -273,6 +174,7 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
     let updatedCount = 0;
 
     try {
+      await this.reloadAllowedRoutes();
       const removedCount = await this.removeDisallowedFlights();
       const prunedCount = await this.pruneStaleFlights();
 
@@ -592,9 +494,11 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
       .orderBy(desc(flights.updatedAt))
       .limit(30);
 
-    const sameDay = candidates.find((flight) =>
-      this.isSameCalendarDay(flight.scheduledTime, item.scheduledTime),
-    );
+    const exact = candidates.find((flight) => flight.scheduledTime.getTime() === item.scheduledTime.getTime());
+    if (exact) return exact;
+    const sameDay = candidates
+      .filter((flight) => this.isSameCalendarDay(flight.scheduledTime, item.scheduledTime))
+      .sort((a, b) => Math.abs(a.scheduledTime.getTime() - item.scheduledTime.getTime()) - Math.abs(b.scheduledTime.getTime() - item.scheduledTime.getTime()))[0];
     if (sameDay) return sameDay;
 
     if (this.isToday(item.scheduledTime)) {
@@ -773,47 +677,31 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
     return map[raw] ?? raw;
   }
 
-  private getDayKey(date: Date): keyof typeof WEEKLY_PLANNED {
-    const idx = this.airportWeekday(date);
-    const map: Record<number, keyof typeof WEEKLY_PLANNED> = {
-      0: 'sun',
-      1: 'mon',
-      2: 'tue',
-      3: 'wed',
-      4: 'thu',
-      5: 'fri',
-      6: 'sat',
-    };
-    return map[idx];
-  }
-
   private airportDateKey(date = new Date()): string {
     const { year, month, day } = this.airportNowParts(date);
     return `${year}-${month}-${day}`;
   }
 
-  private isPlanValidToday(item: { validFrom?: string; validTo?: string }): boolean {
+  private isPlanValidToday(item: { validFrom?: string | null; validTo?: string | null }): boolean {
     const today = this.airportDateKey();
     if (item.validFrom && today < item.validFrom) return false;
     if (item.validTo && today > item.validTo) return false;
     return true;
   }
 
-  private findPlannedToday(flightNumber: string, direction: 'arrival' | 'departure') {
-    const plan = WEEKLY_PLANNED[this.getDayKey(new Date())];
-    if (!plan) return null;
-    const list = direction === 'departure' ? plan.departures : plan.arrivals;
+  private findPlannedToday(flightNumber: string, direction: 'arrival' | 'departure', scheduledTime?: Date) {
+    const list = this.activeSchedule.filter((entry) => entry.weekday === this.airportWeekday() && entry.direction === direction);
     const number = this.normalizeFlightNumber(flightNumber);
-    return (
-      list.find(
+    const matches = list.filter(
         (row) =>
           this.normalizeFlightNumber(row.flightNumber) === number && this.isPlanValidToday(row),
-      ) ?? null
-    );
+      );
+    if (scheduledTime) matches.sort((a, b) => Math.abs(this.makeTodayAt(a.time).getTime() - scheduledTime.getTime()) - Math.abs(this.makeTodayAt(b.time).getTime() - scheduledTime.getTime()));
+    return matches[0] ?? null;
   }
 
   private withOfficialPlan(item: ProviderFlight): ProviderFlight {
-    const planned = this.findPlannedToday(item.flightNumber, item.direction);
+    const planned = this.findPlannedToday(item.flightNumber, item.direction, item.scheduledTime);
     if (!planned) return item;
     const official = this.mapPlanned(planned, item.direction);
     return {
@@ -853,7 +741,9 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
     const byKey = new Map<string, ProviderFlight>();
 
     for (const item of items) {
-      const key = `${item.flightNumber}|${item.direction}`;
+      const planned = this.findPlannedToday(item.flightNumber, item.direction, item.scheduledTime);
+      const scheduledTime = planned ? this.makeTodayAt(planned.time) : item.scheduledTime;
+      const key = `${item.flightNumber}|${item.direction}|${scheduledTime.toISOString()}`;
       const current = byKey.get(key);
       if (!current) {
         byKey.set(key, item);
@@ -880,92 +770,9 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async seedPlannedFlightsForToday(): Promise<number> {
-    const seedEnabled =
-      this.config.get<string>('FLIGHT_SYNC_SEED_PLANNED', 'true').toLowerCase() !== 'false';
-    if (!seedEnabled) return 0;
-
-    const storedPlan = await this.drizzle.db.select().from(flightScheduleEntries);
-    if (storedPlan.length > 0) {
-      return this.ensureTodayFromPlan(storedPlan);
-    }
-
-    const dayKey = this.getDayKey(new Date());
-    const plan = WEEKLY_PLANNED[dayKey];
-    if (!plan) return 0;
-
-    const expected: ProviderFlight[] = [
-      ...plan.departures
-        .filter((item) => this.isPlanValidToday(item))
-        .map((item) => this.mapPlanned(item, 'departure')),
-      ...plan.arrivals
-        .filter((item) => this.isPlanValidToday(item))
-        .map((item) => this.mapPlanned(item, 'arrival')),
-    ];
-
-    let seeded = 0;
-
-    for (const item of expected) {
-      await this.removePastInstances(item.flightNumber, item.direction);
-
-      const existing = await this.findExisting(item);
-      if (existing) {
-        if (!existing.scheduleLocked) {
-          const [updated] = await this.drizzle.db
-            .update(flights)
-            .set({
-              airlineName: item.airlineName,
-              airlineCode: item.airlineCode,
-              city: item.city,
-              cityCode: item.cityCode,
-              scheduledTime: item.scheduledTime,
-              scheduleLocked: true,
-              updatedAt: new Date(),
-            })
-            .where(eq(flights.id, existing.id))
-            .returning();
-          this.events.publish({ type: 'updated', payload: updated });
-        }
-        continue;
-      }
-
-      const [created] = await this.drizzle.db
-        .insert(flights)
-        .values({
-          flightNumber: item.flightNumber,
-          airlineName: item.airlineName,
-          airlineCode: item.airlineCode,
-          direction: item.direction,
-          city: item.city,
-          cityCode: item.cityCode,
-          terminal: item.terminal,
-          gate: item.gate,
-          sector: null,
-          scheduledTime: item.scheduledTime,
-          estimatedTime: item.estimatedTime,
-          status: this.mapPlannedStatus(item.direction, item.scheduledTime),
-          scheduleLocked: true,
-        })
-        .returning();
-
-      this.events.publish({ type: 'created', payload: created });
-      seeded += 1;
-    }
-
-    return seeded;
-  }
-
-  private async removePastInstances(flightNumber: string, direction: 'arrival' | 'departure') {
-    const startOfToday = this.getStartOfToday();
-    const rows = await this.drizzle.db
-      .select()
-      .from(flights)
-      .where(and(eq(flights.flightNumber, flightNumber), eq(flights.direction, direction)));
-
-    for (const row of rows) {
-      if (row.scheduledTime >= startOfToday) continue;
-      await this.drizzle.db.delete(flights).where(eq(flights.id, row.id));
-      this.events.publish({ type: 'deleted', payload: { id: row.id } });
-    }
+    if (this.config.get<string>('FLIGHT_SYNC_SEED_PLANNED', 'true').toLowerCase() === 'false') return 0;
+    const board = await this.getScheduleBoard();
+    return this.applyPlanTimesForToday(board.entries, [], true);
   }
 
   private mapPlanned(
@@ -1009,8 +816,9 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
       .where(eq(scheduleBoard.id, 1))
       .limit(1);
     const stored = await this.drizzle.db.select().from(flightScheduleEntries);
+    const custom = stored.length > 0 || Boolean(board?.planSaved);
     const entries =
-      stored.length > 0
+      custom
         ? stored.map((row) => ({
             id: row.id,
             weekday: row.weekday,
@@ -1018,39 +826,32 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
             direction: row.direction,
             city: row.city,
             time: row.planTime,
+            counterpartTime: row.counterpartTime,
+            validFrom: row.validFrom,
+            validTo: row.validTo,
           }))
         : this.defaultScheduleEntries();
 
     return {
-      source: stored.length > 0 ? 'custom' : 'default',
+      source: custom ? 'custom' : 'default',
       photoUrl: board?.photoUrl ?? null,
       entries,
     };
   }
 
-  async saveSchedulePhoto(photoUrl: string) {
-    await this.ensureScheduleStorage();
-    await this.drizzle.db
-      .insert(scheduleBoard)
-      .values({ id: 1, photoUrl, updatedAt: new Date() })
-      .onConflictDoUpdate({
-        target: scheduleBoard.id,
-        set: { photoUrl, updatedAt: new Date() },
-      });
-    return { photoUrl };
-  }
-
   async saveSchedulePlan(
-    rawEntries: Array<{
-      weekday: number;
-      flightNumber: string;
-      direction: string;
-      city: string;
-      time: string;
-    }>,
+    rawEntries: unknown[],
+    photoUrl?: string,
   ) {
     await this.ensureScheduleStorage();
-    const entries = rawEntries.map((entry) => this.normalizePlanEntry(entry));
+    if (rawEntries.length > 500) throw new BadRequestException('В расписании может быть до 500 рейсов');
+    if (photoUrl !== undefined && (typeof photoUrl !== 'string' || (photoUrl !== '' && !/^\/api\/uploads\/schedules\/[\w-]+\.(jpg|jpeg|png|webp|gif)$/.test(photoUrl)))) {
+      throw new BadRequestException('Некорректный адрес фото расписания');
+    }
+    const entries = rawEntries.map(normalizeScheduleEntry);
+    const keys = entries.map((entry) => `${entry.weekday}|${entry.direction}|${entry.flightNumber}|${entry.time}|${entry.validFrom}|${entry.validTo}`);
+    if (new Set(keys).size !== keys.length) throw new BadRequestException('В расписании есть одинаковые рейсы');
+    const previous = (await this.getScheduleBoard()).entries;
 
     await this.drizzle.db.transaction(async (tx) => {
       await tx.delete(flightScheduleEntries);
@@ -1062,17 +863,26 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
             direction: entry.direction,
             city: entry.city,
             planTime: entry.time,
+            counterpartTime: entry.counterpartTime,
+            validFrom: entry.validFrom,
+            validTo: entry.validTo,
           })),
         );
       }
+      await tx.update(scheduleBoard).set({ planSaved: true, updatedAt: new Date(), ...(photoUrl !== undefined ? { photoUrl: photoUrl || null } : {}) }).where(eq(scheduleBoard.id, 1));
     });
 
     await this.reloadAllowedRoutes();
-    const applied = await this.applyPlanTimesForToday(entries);
+    const applied = await this.applyPlanTimesForToday(entries, previous);
     return { saved: entries.length, applied };
   }
 
-  private async ensureScheduleStorage() {
+  private ensureScheduleStorage(): Promise<void> {
+    if (!this.storageReady) this.storageReady = this.createScheduleStorage().catch((error) => { this.storageReady = null; throw error; });
+    return this.storageReady;
+  }
+
+  private async createScheduleStorage() {
     await this.drizzle.db.execute(sql`
       ALTER TABLE flights
       ADD COLUMN IF NOT EXISTS schedule_locked boolean NOT NULL DEFAULT false
@@ -1094,6 +904,10 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
         updated_at timestamptz NOT NULL DEFAULT now()
       )
     `);
+    await this.drizzle.db.execute(sql`ALTER TABLE flight_schedule_entries ADD COLUMN IF NOT EXISTS counterpart_time varchar(5)`);
+    await this.drizzle.db.execute(sql`ALTER TABLE flight_schedule_entries ADD COLUMN IF NOT EXISTS valid_from varchar(10)`);
+    await this.drizzle.db.execute(sql`ALTER TABLE flight_schedule_entries ADD COLUMN IF NOT EXISTS valid_to varchar(10)`);
+    await this.drizzle.db.execute(sql`ALTER TABLE schedule_board ADD COLUMN IF NOT EXISTS plan_saved boolean NOT NULL DEFAULT false`);
     await this.drizzle.db.execute(sql`
       INSERT INTO schedule_board (id, photo_url, updated_at)
       VALUES (1, NULL, now())
@@ -1107,6 +921,8 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
       this.drizzle.db.select().from(flightScheduleEntries),
       this.drizzle.db.select().from(flights).where(eq(flights.scheduleLocked, true)),
     ]);
+    const board = await this.getScheduleBoard();
+    this.activeSchedule = board.entries;
 
     for (const row of [...planRows, ...lockedRows]) {
       const flightNumber = this.normalizeFlightNumber(row.flightNumber);
@@ -1117,147 +933,32 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
   }
 
   private defaultScheduleEntries() {
-    const dayToWeekday: Record<keyof typeof WEEKLY_PLANNED, number> = {
-      sun: 0,
-      mon: 1,
-      tue: 2,
-      wed: 3,
-      thu: 4,
-      fri: 5,
-      sat: 6,
-    };
-
-    const entries: Array<{
-      id: null;
-      weekday: number;
-      flightNumber: string;
-      direction: 'arrival' | 'departure';
-      city: string;
-      time: string;
-    }> = [];
-
-    for (const [day, plan] of Object.entries(WEEKLY_PLANNED) as Array<
-      [keyof typeof WEEKLY_PLANNED, (typeof WEEKLY_PLANNED)[keyof typeof WEEKLY_PLANNED]]
-    >) {
-      for (const item of plan.departures) {
-        entries.push({
-          id: null,
-          weekday: dayToWeekday[day],
-          flightNumber: item.flightNumber,
-          direction: 'departure',
-          city: item.city,
-          time: item.time,
-        });
-      }
-      for (const item of plan.arrivals) {
-        entries.push({
-          id: null,
-          weekday: dayToWeekday[day],
-          flightNumber: item.flightNumber,
-          direction: 'arrival',
-          city: item.city,
-          time: item.time,
-        });
-      }
-    }
-
-    return entries;
-  }
-
-  private normalizePlanEntry(entry: {
-    weekday: number;
-    flightNumber: string;
-    direction: string;
-    city: string;
-    time: string;
-  }) {
-    const weekday = Number(entry.weekday);
-    const flightNumber = this.normalizeFlightNumber(entry.flightNumber ?? '');
-    const city = String(entry.city ?? '').trim();
-    const time = String(entry.time ?? '').trim();
-    const direction = entry.direction === 'arrival' ? 'arrival' : 'departure';
-
-    if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) {
-      throw new BadRequestException('Некорректный день недели');
-    }
-    if (!flightNumber) {
-      throw new BadRequestException('Укажите номер рейса');
-    }
-    if (!city) {
-      throw new BadRequestException('Укажите город');
-    }
-    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
-      throw new BadRequestException(`Некорректное время у рейса ${flightNumber}`);
-    }
-
-    return { weekday, flightNumber, direction, city, time } as const;
-  }
-
-  private async ensureTodayFromPlan(
-    rows: Array<{
-      weekday: number;
-      flightNumber: string;
-      direction: 'arrival' | 'departure';
-      city: string;
-      planTime: string;
-    }>,
-  ) {
-    const weekday = this.airportWeekday();
-    let seeded = 0;
-
-    for (const row of rows.filter((item) => item.weekday === weekday)) {
-      const item = this.mapPlanned(
-        { flightNumber: row.flightNumber, city: row.city, time: row.planTime },
-        row.direction,
-      );
-      const existing = await this.findExisting(item);
-      if (existing) continue;
-
-      const [created] = await this.drizzle.db
-        .insert(flights)
-        .values({
-          flightNumber: item.flightNumber,
-          airlineName: item.airlineName,
-          airlineCode: item.airlineCode,
-          direction: item.direction,
-          city: item.city,
-          cityCode: item.cityCode,
-          terminal: item.terminal,
-          gate: item.gate,
-          sector: null,
-          scheduledTime: item.scheduledTime,
-          estimatedTime: null,
-          status: this.mapPlannedStatus(item.direction, item.scheduledTime),
-          scheduleLocked: true,
-        })
-        .returning();
-      this.events.publish({ type: 'created', payload: created });
-      seeded += 1;
-    }
-
-    return seeded;
+    return DEFAULT_SCHEDULE_ENTRIES.map((entry) => ({ id: null, ...entry }));
   }
 
   private async applyPlanTimesForToday(
-    entries: Array<{
-      weekday: number;
-      flightNumber: string;
-      direction: 'arrival' | 'departure';
-      city: string;
-      time: string;
-    }>,
+    entries: ScheduleEntry[],
+    previous: ScheduleEntry[] = [],
+    seedOnly = false,
   ) {
     const weekday = this.airportWeekday();
     let applied = 0;
+    const todayEntries = entries.filter((item) => item.weekday === weekday && this.isPlanValidToday(item));
+    const todayRows = (await this.drizzle.db.select().from(flights)).filter((row) => this.isToday(row.scheduledTime));
+    const used = new Set<string>();
 
-    for (const entry of entries.filter((item) => item.weekday === weekday)) {
+    for (const entry of todayEntries) {
       const item = this.mapPlanned(
         { flightNumber: entry.flightNumber, city: entry.city, time: entry.time },
         entry.direction,
       );
-      const existing = await this.findExisting(item);
+      const existing = todayRows
+        .filter((row) => !used.has(row.id) && row.flightNumber === item.flightNumber && row.direction === item.direction)
+        .sort((a, b) => Math.abs(a.scheduledTime.getTime() - item.scheduledTime.getTime()) - Math.abs(b.scheduledTime.getTime() - item.scheduledTime.getTime()))[0];
 
       if (existing) {
+        used.add(existing.id);
+        if (seedOnly) continue;
         const [updated] = await this.drizzle.db
           .update(flights)
           .set({
@@ -1296,6 +997,16 @@ export class FlightSyncService implements OnModuleInit, OnModuleDestroy {
       }
 
       applied += 1;
+    }
+
+    // Remove occurrences from the previous plan that were removed or expired.
+    // Independently entered flights have no matching previous slot and are retained.
+    for (const row of todayRows) {
+      if (used.has(row.id)) continue;
+      const oldSlot = previous.some((entry) => entry.weekday === weekday && entry.flightNumber === row.flightNumber && entry.direction === row.direction && this.makeTodayAt(entry.time).getTime() === row.scheduledTime.getTime());
+      if (!oldSlot) continue;
+      await this.drizzle.db.delete(flights).where(eq(flights.id, row.id));
+      this.events.publish({ type: 'deleted', payload: { id: row.id } });
     }
 
     return applied;

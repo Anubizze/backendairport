@@ -108,12 +108,10 @@ export class FlightsService {
         .where(conditions.length ? and(...conditions) : undefined)
         .orderBy(desc(flights.scheduledTime));
 
-      // Strict mode for board output:
-      // keep only the freshest record per flight number + direction.
-      // This prevents older seeded rows from appearing when live sync rows exist.
+      // Keep distinct occurrences: the paper timetable can repeat a flight number.
       const byFlight = new Map<string, (typeof rows)[number]>();
       for (const row of rows) {
-        const key = `${row.direction}|${row.flightNumber.trim().toUpperCase()}`;
+        const key = `${row.direction}|${row.flightNumber.trim().toUpperCase()}|${row.scheduledTime.toISOString()}`;
         const existing = byFlight.get(key);
         if (!existing) {
           byFlight.set(key, row);

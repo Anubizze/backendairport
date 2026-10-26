@@ -7,6 +7,7 @@
     "dev": "nest start --watch",
     "build": "nest build",
     "test:service-photos": "tsc -p tsconfig.build.json --incremental false && node --test test/service-photos.test.cjs",
+    "test:schedule": "tsc -p tsconfig.build.json --incremental false && node --test test/schedule.test.cjs",
     "start": "node dist/main.js",
     "start:dev": "nest start --watch",
     "start:prod": "node dist/main.js",
@@ -26,6 +27,8 @@
     "@nestjs/passport": "^10.0.3",
     "@nestjs/platform-express": "^10.4.7",
     "@nestjs/throttler": "^6.5.0",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "@tesseract.js-data/rus": "^1.0.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "dotenv": "^16.4.5",
@@ -38,7 +41,9 @@
     "passport-jwt": "^4.0.1",
     "pg": "^8.13.0",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "sharp": "^0.35.5",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.4.5",

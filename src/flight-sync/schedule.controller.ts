@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   Post,
   Put,
   UploadedFile,
@@ -11,59 +12,61 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
-import { extname, join } from 'path';
+import { join } from 'path';
 import { randomUUID } from 'crypto';
+import { mkdirSync } from 'fs';
+import { unlink } from 'fs/promises';
 
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 
 import { FlightSyncService } from './flight-sync.service';
+import { ScheduleRecognitionService } from './schedule-recognition.service';
 
 const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 const MAX_FILE_SIZE = 8 * 1024 * 1024;
 
-type ScheduleEntryBody = {
-  weekday: number;
-  flightNumber: string;
-  direction: string;
-  city: string;
-  time: string;
-};
-
 @Controller('schedule')
-@UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('superadmin', 'dispatcher')
 export class ScheduleController {
-  constructor(private readonly flightSync: FlightSyncService) {}
+  constructor(private readonly flightSync: FlightSyncService, private readonly recognition: ScheduleRecognitionService) {}
 
   @Get()
+  @Header('Cache-Control', 'no-store')
   getBoard() {
     return this.flightSync.getScheduleBoard();
   }
 
   @Put()
-  savePlan(@Body() body: { entries?: ScheduleEntryBody[] }) {
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('superadmin', 'dispatcher')
+  savePlan(@Body() body: { entries?: unknown[]; photoUrl?: string }) {
     if (!Array.isArray(body?.entries)) {
       throw new BadRequestException('Передайте список рейсов расписания');
     }
-    return this.flightSync.saveSchedulePlan(body.entries);
+    return this.flightSync.saveSchedulePlan(body.entries, body.photoUrl);
   }
 
   @Post('sync')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('superadmin', 'dispatcher')
   syncNow() {
     return this.flightSync.triggerSync();
   }
 
   @Post('photo')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('superadmin', 'dispatcher')
   @UseInterceptors(
     FileInterceptor('file', {
       storage: diskStorage({
         destination: (_req, _file, cb) => {
-          cb(null, join(process.cwd(), 'uploads', 'schedules'));
+          const directory = join(process.cwd(), 'uploads', 'schedules');
+          mkdirSync(directory, { recursive: true });
+          cb(null, directory);
         },
         filename: (_req, file, cb) => {
-          const ext = extname(file.originalname).toLowerCase() || '.jpg';
+          const ext = ({ 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif' })[file.mimetype] || '.jpg';
           cb(null, `${randomUUID()}${ext}`);
         },
       }),
@@ -80,10 +83,16 @@ export class ScheduleController {
       },
     }),
   )
-  uploadPhoto(@UploadedFile() file: Express.Multer.File) {
+  async uploadPhoto(@UploadedFile() file: Express.Multer.File) {
     if (!file) {
       throw new BadRequestException('Выберите фото расписания');
     }
-    return this.flightSync.saveSchedulePhoto(`/api/uploads/schedules/${file.filename}`);
+    try {
+      const parsed = await this.recognition.recognize(file.path);
+      return { photoUrl: `/api/uploads/schedules/${file.filename}`, ...parsed };
+    } catch (error) {
+      await unlink(file.path).catch(() => undefined);
+      throw error;
+    }
   }
 }
